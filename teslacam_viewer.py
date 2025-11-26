@@ -126,6 +126,22 @@ class TeslaCamViewer:
             self.teslacam_path = Path(folder)
             self.refresh_file_list()
             self.status_label.config(text=f"Loaded: {folder}")
+    
+    def parse_timestamp(self, filename):
+        """Parse timestamp from TeslaCam filename"""
+        try:
+            # TeslaCam format: YYYY-MM-DD_HH-MM-SS-front.mp4
+            timestamp_str = filename.stem.split("-front")[0]
+            # Replace last dashes with colons for time
+            parts = timestamp_str.split('_')
+            if len(parts) == 2:
+                date_part = parts[0]
+                time_part = parts[1].replace('-', ':')
+                datetime_str = f"{date_part} {time_part}"
+                return datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
+        except:
+            pass
+        return None
             
     def refresh_file_list(self):
         """Refresh the list of video files"""
@@ -137,21 +153,48 @@ class TeslaCamViewer:
         
         folder_type = self.folder_type.get()
         
+        # Collect all video files with metadata
+        video_data = []
+        
         # Search for video files
         if folder_type == "All":
             search_dirs = ["SavedClips", "SentryClips", "RecentClips"]
         else:
             search_dirs = [folder_type]
-            
+        
         for dir_name in search_dirs:
             dir_path = self.teslacam_path / dir_name
             if dir_path.exists():
-                for video_file in sorted(dir_path.glob("*-front.mp4")):
-                    # Extract timestamp from filename
-                    timestamp = video_file.stem.split("-front")[0]
-                    display_name = f"[{dir_name}] {timestamp}"
-                    self.file_listbox.insert(tk.END, display_name)
-                    self.video_files.append(video_file)
+                # Search in main folder
+                for video_file in dir_path.glob("*-front.mp4"):
+                    timestamp = self.parse_timestamp(video_file)
+                    video_data.append((video_file, dir_name, timestamp))
+                
+                # Search in subdirectories (date folders)
+                for subdir in dir_path.iterdir():
+                    if subdir.is_dir():
+                        for video_file in subdir.glob("*-front.mp4"):
+                            timestamp = self.parse_timestamp(video_file)
+                            video_data.append((video_file, dir_name, timestamp))
+        
+        # Sort by timestamp (newest first)
+        video_data.sort(key=lambda x: x[2] if x[2] else datetime.min, reverse=True)
+        
+        # Populate listbox
+        for video_file, dir_name, timestamp in video_data:
+            if timestamp:
+                # Format: [Type] MM/DD/YYYY HH:MM:SS
+                display_name = f"[{dir_name[:6]}] {timestamp.strftime('%m/%d/%Y %I:%M:%S %p')}"
+            else:
+                # Fallback to filename
+                display_name = f"[{dir_name[:6]}] {video_file.stem}"
+            
+            self.file_listbox.insert(tk.END, display_name)
+            self.video_files.append(video_file)
+        
+        # Update status
+        count = len(video_data)
+        self.status_label.config(text=f"Found {count} clip(s) in {folder_type}")
                     
     def on_file_select(self, event):
         """Handle file selection from listbox"""
