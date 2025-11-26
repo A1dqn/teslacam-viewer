@@ -118,7 +118,6 @@ class TeslaCamViewer:
         self.is_playing = False
         self.video_files = []
         self.all_events = []
-        self.base_delay = 28  # Base delay in ms (will be calculated from FPS)
         self.playback_speed = 1.0  # Current playback speed multiplier
         self.speed_buttons = []  # Store speed button references
         
@@ -702,14 +701,6 @@ class TeslaCamViewer:
             self.current_video = front_video_clips[0]
             timestamp = self.parse_timestamp(front_video_clips[0])
             
-            # Calculate base delay from video FPS
-            if 'front' in self.video_captures:
-                fps = self.video_captures['front'].get(cv2.CAP_PROP_FPS)
-                if fps > 0:
-                    self.base_delay = int(1000 / fps)  # Milliseconds per frame
-                else:
-                    self.base_delay = 28  # Default for ~36 FPS
-            
             if timestamp:
                 self.video_title.config(text=timestamp.strftime('%A, %B %d, %Y'))
                 camera_count = len(self.video_captures)
@@ -801,7 +792,7 @@ class TeslaCamViewer:
             self.play_button.config(text="▶ Play")
             
     def play_video(self):
-        """Play merged video in a loop"""
+        """Play merged video with speed control"""
         if self.is_playing and self.video_captures:
             has_frames = False
             for cap in self.video_captures.values():
@@ -810,10 +801,23 @@ class TeslaCamViewer:
                     break
             
             if has_frames:
+                # Skip frames for speeds > 1x
+                if self.playback_speed > 1.0:
+                    # Skip frames to speed up
+                    skip_frames = int(self.playback_speed) - 1
+                    for _ in range(skip_frames):
+                        for cap in self.video_captures.values():
+                            cap.read()  # Read and discard frame
+                
                 self.show_merged_frame()
-                # Calculate delay based on speed: delay = base_delay / speed
-                actual_delay = int(self.base_delay / self.playback_speed)
-                self.root.after(actual_delay, self.play_video)
+                
+                # Use fixed 33ms delay for smooth playback, adjust for slow motion
+                if self.playback_speed < 1.0:
+                    delay = int(33 / self.playback_speed)
+                else:
+                    delay = 33
+                
+                self.root.after(delay, self.play_video)
             else:
                 self.is_playing = False
                 self.play_button.config(text="▶ Play")
