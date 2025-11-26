@@ -14,6 +14,7 @@ from PIL import Image, ImageTk
 from datetime import datetime, timedelta
 import threading
 import numpy as np
+import platform
 
 
 class MultiVideoCapture:
@@ -125,6 +126,9 @@ class TeslaCamViewer:
         # Setup UI
         self.setup_ui()
         
+        # Auto-detect TeslaCam folder on startup
+        self.root.after(100, self.auto_detect_teslacam)
+        
     def setup_style(self):
         """Configure modern styling"""
         style = ttk.Style()
@@ -191,7 +195,7 @@ class TeslaCamViewer:
         open_btn.pack(side=tk.LEFT, padx=15, pady=10)
         
         # Folder path label
-        self.folder_label = tk.Label(toolbar, text="No folder selected", 
+        self.folder_label = tk.Label(toolbar, text="Searching for TeslaCam folder...", 
                                     bg='#2d2d2d', fg='#888888',
                                     font=('Segoe UI', 10))
         self.folder_label.pack(side=tk.LEFT, padx=10)
@@ -354,10 +358,71 @@ class TeslaCamViewer:
         self.time_label.pack(pady=(0, 10))
         
         # Status bar
-        self.status_label = tk.Label(self.root, text="Ready - Open a TeslaCam folder to begin", 
+        self.status_label = tk.Label(self.root, text="Ready - Searching for TeslaCam folder...", 
                                     relief=tk.FLAT, bg='#2d2d2d', fg='#888888',
                                     font=('Segoe UI', 9), anchor='w', padx=15)
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
+    
+    def find_teslacam_folder(self):
+        """Search for TeslaCam folder in common locations"""
+        search_locations = []
+        
+        if platform.system() == 'Windows':
+            # Check all drive letters (common for USB drives)
+            import string
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if os.path.exists(drive):
+                    search_locations.append(Path(drive))
+        else:
+            # macOS and Linux
+            # Check /Volumes (macOS) and /media, /mnt (Linux)
+            for mount_point in ['/Volumes', '/media', '/mnt']:
+                if os.path.exists(mount_point):
+                    mount_path = Path(mount_point)
+                    if mount_path.exists():
+                        # Add all subdirectories (mounted drives)
+                        try:
+                            for item in mount_path.iterdir():
+                                if item.is_dir():
+                                    search_locations.append(item)
+                        except PermissionError:
+                            pass
+        
+        # Search each location for TeslaCam folder
+        for location in search_locations:
+            try:
+                teslacam_path = location / "TeslaCam"
+                if teslacam_path.exists() and teslacam_path.is_dir():
+                    # Verify it has the expected subfolders
+                    has_clips = any([
+                        (teslacam_path / "SavedClips").exists(),
+                        (teslacam_path / "SentryClips").exists(),
+                        (teslacam_path / "RecentClips").exists()
+                    ])
+                    
+                    if has_clips:
+                        return teslacam_path
+            except (PermissionError, OSError):
+                continue
+        
+        return None
+    
+    def auto_detect_teslacam(self):
+        """Automatically detect and load TeslaCam folder on startup"""
+        self.status_label.config(text="Searching for TeslaCam folder...")
+        self.root.update()
+        
+        teslacam_path = self.find_teslacam_folder()
+        
+        if teslacam_path:
+            self.teslacam_path = teslacam_path
+            self.folder_label.config(text=f"✓ Auto-detected: {str(teslacam_path)}", fg='#00ff00')
+            self.status_label.config(text="TeslaCam folder auto-detected and loaded!")
+            self.refresh_file_list()
+        else:
+            self.folder_label.config(text="No TeslaCam folder found - Click to select manually", fg='#ff9900')
+            self.status_label.config(text="No TeslaCam folder found - Please open folder manually")
         
     def open_folder(self):
         """Open TeslaCam folder dialog"""
@@ -750,6 +815,7 @@ class TeslaCamViewer:
                           "  • 4-camera synchronized playback\n"
                           "  • Automatic clip stitching\n"
                           "  • Event timeline and filtering\n"
+                          "  • Auto-detect TeslaCam folder\n"
                           "  • Modern, intuitive interface\n\n"
                           "Created by Aidan\n"
                           "GitHub: github.com/A1dqn/teslacam-viewer\n\n"
