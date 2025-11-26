@@ -118,7 +118,9 @@ class TeslaCamViewer:
         self.is_playing = False
         self.video_files = []
         self.all_events = []
-        self.playback_delay = 28  # Default delay in ms, will be calculated from FPS
+        self.base_delay = 28  # Base delay in ms (will be calculated from FPS)
+        self.playback_speed = 1.0  # Current playback speed multiplier
+        self.speed_buttons = []  # Store speed button references
         
         # Configure style
         self.setup_style()
@@ -341,6 +343,27 @@ class TeslaCamViewer:
                             cursor='hand2')
         stop_btn.pack(side=tk.LEFT, padx=5)
         
+        # Speed control buttons
+        speed_frame = tk.Frame(controls_frame, bg='#2d2d2d')
+        speed_frame.pack(pady=(0, 10))
+        
+        tk.Label(speed_frame, text="Speed:", bg='#2d2d2d', fg='#ffffff',
+                font=('Segoe UI', 10)).pack(side=tk.LEFT, padx=(0, 10))
+        
+        speeds = [0.5, 1.0, 1.5, 2.0, 3.0]
+        for speed in speeds:
+            btn = tk.Button(speed_frame, text=f"{speed}x",
+                          command=lambda s=speed: self.set_playback_speed(s),
+                          bg='#3c3c3c', fg='#ffffff',
+                          font=('Segoe UI', 9),
+                          relief=tk.FLAT, padx=12, pady=4,
+                          cursor='hand2')
+            btn.pack(side=tk.LEFT, padx=2)
+            self.speed_buttons.append(btn)
+        
+        # Highlight 1x speed by default
+        self.speed_buttons[1].config(bg='#007acc')
+        
         # Progress bar
         progress_frame = tk.Frame(controls_frame, bg='#2d2d2d')
         progress_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
@@ -362,6 +385,18 @@ class TeslaCamViewer:
                                     relief=tk.FLAT, bg='#2d2d2d', fg='#888888',
                                     font=('Segoe UI', 9), anchor='w', padx=15)
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
+    
+    def set_playback_speed(self, speed):
+        """Set playback speed"""
+        self.playback_speed = speed
+        
+        # Update button colors to show selected speed
+        speeds = [0.5, 1.0, 1.5, 2.0, 3.0]
+        for i, btn in enumerate(self.speed_buttons):
+            if speeds[i] == speed:
+                btn.config(bg='#007acc')
+            else:
+                btn.config(bg='#3c3c3c')
     
     def find_teslacam_folder(self):
         """Search for TeslaCam folder in common locations"""
@@ -667,13 +702,13 @@ class TeslaCamViewer:
             self.current_video = front_video_clips[0]
             timestamp = self.parse_timestamp(front_video_clips[0])
             
-            # Calculate playback delay based on video FPS
+            # Calculate base delay from video FPS
             if 'front' in self.video_captures:
                 fps = self.video_captures['front'].get(cv2.CAP_PROP_FPS)
                 if fps > 0:
-                    self.playback_delay = int(1000 / fps)  # Convert FPS to milliseconds per frame
+                    self.base_delay = int(1000 / fps)  # Milliseconds per frame
                 else:
-                    self.playback_delay = 28  # Default for ~36 FPS
+                    self.base_delay = 28  # Default for ~36 FPS
             
             if timestamp:
                 self.video_title.config(text=timestamp.strftime('%A, %B %d, %Y'))
@@ -776,8 +811,9 @@ class TeslaCamViewer:
             
             if has_frames:
                 self.show_merged_frame()
-                # Use calculated delay based on actual video FPS
-                self.root.after(self.playback_delay, self.play_video)
+                # Calculate delay based on speed: delay = base_delay / speed
+                actual_delay = int(self.base_delay / self.playback_speed)
+                self.root.after(actual_delay, self.play_video)
             else:
                 self.is_playing = False
                 self.play_button.config(text="▶ Play")
@@ -816,6 +852,7 @@ class TeslaCamViewer:
                           "  • Automatic clip stitching\n"
                           "  • Event timeline and filtering\n"
                           "  • Auto-detect TeslaCam folder\n"
+                          "  • Adjustable playback speed (0.5x - 3x)\n"
                           "  • Modern, intuitive interface\n\n"
                           "Created by Aidan\n"
                           "GitHub: github.com/A1dqn/teslacam-viewer\n\n"
