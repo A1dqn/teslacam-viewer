@@ -704,7 +704,7 @@ class TeslaCamViewer:
             self.current_video = front_video_clips[0]
             timestamp = self.parse_timestamp(front_video_clips[0])
             
-            # Get actual video FPS
+            # Get actual video FPS for display only
             if 'front' in self.video_captures:
                 fps = self.video_captures['front'].get(cv2.CAP_PROP_FPS)
                 if fps > 0:
@@ -720,7 +720,7 @@ class TeslaCamViewer:
             self.is_playing = False
             self.play_button.config(text="▶ Play")
             self.show_merged_frame()
-            self.status_label.config(text=f"Ready to play - {total_clips} minute event at {self.video_fps:.1f} FPS")
+            self.status_label.config(text=f"Ready to play - {total_clips} minute event")
         else:
             messagebox.showerror("Error", f"Could not open any video files")
             
@@ -804,7 +804,7 @@ class TeslaCamViewer:
             self.play_button.config(text="▶ Play")
             
     def play_video(self):
-        """Play merged video with time-based speed control"""
+        """Play merged video with normalized speed for all framerates"""
         if self.is_playing and self.video_captures:
             has_frames = False
             for cap in self.video_captures.values():
@@ -815,8 +815,9 @@ class TeslaCamViewer:
             if has_frames:
                 current_time = time.time()
                 
-                # Calculate how much time should have passed for one frame at current speed
-                frame_duration = (1.0 / self.video_fps) / self.playback_speed
+                # Use fixed 30ms frame interval for consistent real-time feel
+                # This normalizes playback across all framerates
+                frame_duration = 0.030 / self.playback_speed  # 30ms base = ~33 FPS feel
                 time_since_last_frame = current_time - self.last_frame_time
                 
                 # Only show new frame if enough time has passed
