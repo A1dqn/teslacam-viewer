@@ -10,19 +10,24 @@ A modern Python application for viewing and managing TeslaCam and Sentry Mode fo
 - ⚡ **Variable Playback Speed** - Control playback from 0.5x to 3x speed
 - 🎬 **Normalized Speed** - Consistent playback feel regardless of source framerate
 - 📊 **Progress Bar** - Visual timeline with seek capability
+- 💾 **Video Export** - Export events as merged 4-camera grid videos (MP4)
 
 ### Organization & Discovery
 - 🔍 **Auto-Detect TeslaCam Folder** - Automatically finds your USB drive on startup
 - 📁 **Smart Event Grouping** - Groups clips within 15 minutes into single events
-- 🔎 **Search & Filter** - Search by date, time, or event type
+- 🔎 **Search & Filter** - Search by date, time, event type, or tags
 - 📋 **Event Timeline** - Browse all events with detailed information
 - 🏷️ **Event Types** - Separate views for Saved, Sentry, and Recent clips
+- 🏷️ **Event Tagging** - Add custom tags to events for easy organization
+- 📝 **Event Notes** - Add detailed notes to any event
+- 💾 **Persistent Metadata** - Tags and notes saved automatically
 
 ### Modern Interface
 - 🎨 **Dark Theme UI** - Modern, sleek interface designed for extended viewing
 - 📱 **Intuitive Controls** - Clean, easy-to-use playback controls
 - ⌨️ **Keyboard Shortcuts** - Quick access to common functions
 - 📈 **Event Details** - Shows timestamp, duration, camera count, and FPS
+- 🖱️ **Context Menu** - Right-click events for quick actions
 
 ## 📋 Requirements
 
@@ -57,7 +62,7 @@ python teslacam_viewer.py
 
 4. **Browse Events** - Use the event list on the left to browse recordings
    - Filter by type: All Events, Saved, Sentry, or Recent
-   - Search by date or time
+   - Search by date, time, or tags
 
 5. **Play Videos**:
    - Click an event to load it
@@ -65,11 +70,17 @@ python teslacam_viewer.py
    - Use speed buttons (0.5x - 3x) to adjust playback speed
    - Drag the progress bar to seek
 
+6. **Manage Events**:
+   - **Right-click** any event to add tags and notes
+   - **Export** events as merged 4-camera videos
+   - Tags and notes are saved automatically
+
 ## ⌨️ Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+O` | Open TeslaCam folder |
+| `Ctrl+E` | Export current event |
 | `Space` | Play/Pause video |
 | `Ctrl+Q` | Quit application |
 
@@ -93,6 +104,9 @@ Each event includes files for up to 4 cameras:
 - `*-left_repeater.mp4` - Left side camera
 - `*-right_repeater.mp4` - Right side camera
 
+Metadata (tags and notes) are stored in:
+- `teslacam_metadata.json` - Automatically created in your TeslaCam folder
+
 ## 🎯 Key Features Explained
 
 ### Automatic Clip Stitching
@@ -111,6 +125,20 @@ TeslaCam records in 1-minute segments. The viewer automatically:
 - Each event shows the start time and total duration
 - Events are sorted by date (newest first)
 
+### Video Export
+- Exports events as single merged MP4 files
+- Includes all 4 camera angles in a 2x2 grid layout
+- Maintains original video quality and framerate
+- Progress dialog shows export status
+- Exported videos are ready to share or archive
+
+### Event Tagging & Notes
+- **Tags**: Add multiple tags to any event (e.g., "accident", "parking lot", "highway")
+- **Notes**: Add detailed text notes for context
+- **Persistent Storage**: Tags and notes saved to JSON file automatically
+- **Search Integration**: Search events by tags
+- **Context Menu**: Right-click events for quick editing
+
 ## 🔧 Technical Details
 
 ### Dependencies
@@ -123,6 +151,7 @@ TeslaCam records in 1-minute segments. The viewer automatically:
 - Time-based playback ensures smooth video at any speed
 - Optimized frame display (1ms update loop)
 - Efficient memory management with multi-clip handling
+- Threaded video export prevents UI freezing
 
 ## 🤝 Contributing
 
@@ -154,12 +183,12 @@ If you encounter any issues or have suggestions:
 
 ## 🗺️ Roadmap
 
-- [ ] Video export functionality
-- [ ] Event tagging and notes
 - [ ] GPS data overlay (if available)
 - [ ] Cloud backup integration
 - [ ] Video enhancement filters
 - [ ] Multi-language support
+- [ ] Batch export functionality
+- [ ] Timeline view with thumbnails
 
 ---
 
