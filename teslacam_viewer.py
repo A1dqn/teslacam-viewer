@@ -7,7 +7,7 @@ License: MIT
 
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, simpledialog
 from pathlib import Path
 import cv2
 from PIL import Image, ImageTk
@@ -16,6 +16,7 @@ import threading
 import numpy as np
 import platform
 import time
+import json
 
 
 class MultiVideoCapture:
@@ -106,6 +107,113 @@ class MultiVideoCapture:
             self.current_capture = None
 
 
+class TagNoteDialog(tk.Toplevel):
+    """Dialog for editing event tags and notes"""
+    def __init__(self, parent, event_data):
+        super().__init__(parent)
+        self.title("Edit Event Tags & Notes")
+        self.geometry("500x400")
+        self.configure(bg='#2d2d2d')
+        
+        self.event_data = event_data
+        self.result = None
+        
+        # Tags section
+        tk.Label(self, text="Tags (comma-separated):", bg='#2d2d2d', fg='#ffffff',
+                font=('Segoe UI', 10, 'bold')).pack(pady=(20, 5), padx=20, anchor='w')
+        
+        self.tags_entry = tk.Entry(self, bg='#3c3c3c', fg='#ffffff',
+                                   font=('Segoe UI', 10),
+                                   insertbackground='#ffffff',
+                                   relief=tk.FLAT)
+        self.tags_entry.pack(fill=tk.X, padx=20, ipady=5)
+        
+        # Pre-fill existing tags
+        if 'tags' in event_data and event_data['tags']:
+            self.tags_entry.insert(0, ', '.join(event_data['tags']))
+        
+        # Notes section
+        tk.Label(self, text="Notes:", bg='#2d2d2d', fg='#ffffff',
+                font=('Segoe UI', 10, 'bold')).pack(pady=(20, 5), padx=20, anchor='w')
+        
+        self.notes_text = tk.Text(self, bg='#3c3c3c', fg='#ffffff',
+                                 font=('Segoe UI', 10),
+                                 insertbackground='#ffffff',
+                                 relief=tk.FLAT, height=10)
+        self.notes_text.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        
+        # Pre-fill existing notes
+        if 'notes' in event_data and event_data['notes']:
+            self.notes_text.insert('1.0', event_data['notes'])
+        
+        # Buttons
+        button_frame = tk.Frame(self, bg='#2d2d2d')
+        button_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+        
+        tk.Button(button_frame, text="Save", command=self.save,
+                 bg='#007acc', fg='#ffffff',
+                 font=('Segoe UI', 10, 'bold'),
+                 relief=tk.FLAT, padx=20, pady=8,
+                 cursor='hand2').pack(side=tk.LEFT, padx=(0, 10))
+        
+        tk.Button(button_frame, text="Cancel", command=self.cancel,
+                 bg='#3c3c3c', fg='#ffffff',
+                 font=('Segoe UI', 10),
+                 relief=tk.FLAT, padx=20, pady=8,
+                 cursor='hand2').pack(side=tk.LEFT)
+        
+        # Make dialog modal
+        self.transient(parent)
+        self.grab_set()
+        
+    def save(self):
+        """Save tags and notes"""
+        tags_text = self.tags_entry.get().strip()
+        tags = [tag.strip() for tag in tags_text.split(',') if tag.strip()]
+        notes = self.notes_text.get('1.0', 'end-1c').strip()
+        
+        self.result = {
+            'tags': tags,
+            'notes': notes
+        }
+        self.destroy()
+    
+    def cancel(self):
+        """Cancel without saving"""
+        self.result = None
+        self.destroy()
+
+
+class ExportProgressDialog(tk.Toplevel):
+    """Dialog showing export progress"""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Exporting Video")
+        self.geometry("400x150")
+        self.configure(bg='#2d2d2d')
+        
+        tk.Label(self, text="Exporting video...", bg='#2d2d2d', fg='#ffffff',
+                font=('Segoe UI', 12, 'bold')).pack(pady=(20, 10))
+        
+        self.progress = ttk.Progressbar(self, length=350, mode='determinate')
+        self.progress.pack(pady=10)
+        
+        self.status_label = tk.Label(self, text="Processing...", bg='#2d2d2d', fg='#888888',
+                                     font=('Segoe UI', 9))
+        self.status_label.pack(pady=10)
+        
+        # Make dialog modal
+        self.transient(parent)
+        self.grab_set()
+        
+    def update_progress(self, value, status=""):
+        """Update progress bar and status"""
+        self.progress['value'] = value
+        if status:
+            self.status_label.config(text=status)
+        self.update()
+
+
 class TeslaCamViewer:
     def __init__(self, root):
         self.root = root
@@ -123,6 +231,7 @@ class TeslaCamViewer:
         self.speed_buttons = []  # Store speed button references
         self.last_frame_time = 0  # Track time of last frame for accurate playback
         self.video_fps = 30.0  # Will be set from actual video
+        self.metadata = {}  # Store tags and notes
         
         # Configure style
         self.setup_style()
@@ -174,6 +283,8 @@ class TeslaCamViewer:
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Open TeslaCam Folder...", command=self.open_folder, accelerator="Ctrl+O")
         file_menu.add_separator()
+        file_menu.add_command(label="Export Current Event...", command=self.export_current_event, accelerator="Ctrl+E")
+        file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit, accelerator="Ctrl+Q")
         
         help_menu = tk.Menu(menubar, tearoff=0, bg='#2d2d2d', fg='#ffffff')
@@ -182,6 +293,7 @@ class TeslaCamViewer:
         
         # Keyboard shortcuts
         self.root.bind('<Control-o>', lambda e: self.open_folder())
+        self.root.bind('<Control-e>', lambda e: self.export_current_event())
         self.root.bind('<Control-q>', lambda e: self.root.quit())
         self.root.bind('<space>', lambda e: self.toggle_playback())
         
@@ -197,6 +309,15 @@ class TeslaCamViewer:
                             relief=tk.FLAT, padx=20, pady=10,
                             cursor='hand2')
         open_btn.pack(side=tk.LEFT, padx=15, pady=10)
+        
+        # Export button
+        export_btn = tk.Button(toolbar, text="💾 Export Event", 
+                              command=self.export_current_event,
+                              bg='#3c3c3c', fg='#ffffff', 
+                              font=('Segoe UI', 11),
+                              relief=tk.FLAT, padx=20, pady=10,
+                              cursor='hand2')
+        export_btn.pack(side=tk.LEFT, padx=(0, 15), pady=10)
         
         # Folder path label
         self.folder_label = tk.Label(toolbar, text="Searching for TeslaCam folder...", 
@@ -265,7 +386,7 @@ class TeslaCamViewer:
         list_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
         
         # Column headers
-        columns = ('date', 'time', 'duration', 'type')
+        columns = ('date', 'time', 'duration', 'type', 'tags')
         self.event_tree = ttk.Treeview(list_container, columns=columns, 
                                        show='tree headings', selectmode='browse')
         
@@ -275,12 +396,14 @@ class TeslaCamViewer:
         self.event_tree.heading('time', text='Time')
         self.event_tree.heading('duration', text='Duration')
         self.event_tree.heading('type', text='Type')
+        self.event_tree.heading('tags', text='Tags')
         
         self.event_tree.column('#0', width=50, minwidth=50)
         self.event_tree.column('date', width=100, minwidth=80)
         self.event_tree.column('time', width=100, minwidth=80)
-        self.event_tree.column('duration', width=80, minwidth=60)
-        self.event_tree.column('type', width=80, minwidth=60)
+        self.event_tree.column('duration', width=70, minwidth=60)
+        self.event_tree.column('type', width=60, minwidth=50)
+        self.event_tree.column('tags', width=120, minwidth=80)
         
         # Scrollbar
         scrollbar = ttk.Scrollbar(list_container, orient='vertical', command=self.event_tree.yview)
@@ -290,6 +413,12 @@ class TeslaCamViewer:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.event_tree.bind('<<TreeviewSelect>>', self.on_event_select)
+        
+        # Context menu for event tree
+        self.context_menu = tk.Menu(self.root, tearoff=0, bg='#2d2d2d', fg='#ffffff')
+        self.context_menu.add_command(label="✏️ Edit Tags & Notes", command=self.edit_tags_notes)
+        self.context_menu.add_command(label="💾 Export Event", command=self.export_selected_event)
+        self.event_tree.bind('<Button-3>', self.show_context_menu)  # Right-click
         
         # Right panel - Video player
         right_panel = tk.Frame(main_container, bg='#1e1e1e')
@@ -310,6 +439,22 @@ class TeslaCamViewer:
                                    font=('Segoe UI', 10),
                                    anchor='w')
         self.video_info.pack(side=tk.LEFT, padx=(15, 0))
+        
+        # Tags and notes display
+        self.tags_notes_frame = tk.Frame(right_panel, bg='#1e1e1e')
+        self.tags_notes_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.tags_label = tk.Label(self.tags_notes_frame, text="",
+                                   bg='#1e1e1e', fg='#888888',
+                                   font=('Segoe UI', 9),
+                                   anchor='w')
+        self.tags_label.pack(side=tk.LEFT)
+        
+        self.notes_label = tk.Label(self.tags_notes_frame, text="",
+                                    bg='#1e1e1e', fg='#888888',
+                                    font=('Segoe UI', 9, 'italic'),
+                                    anchor='w')
+        self.notes_label.pack(side=tk.LEFT, padx=(15, 0))
         
         # Video display area
         video_container = tk.Frame(right_panel, bg='#000000', relief=tk.SUNKEN, bd=2)
@@ -388,6 +533,252 @@ class TeslaCamViewer:
                                     font=('Segoe UI', 9), anchor='w', padx=15)
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
     
+    def show_context_menu(self, event):
+        """Show context menu on right-click"""
+        # Select the item under cursor
+        item = self.event_tree.identify_row(event.y)
+        if item:
+            self.event_tree.selection_set(item)
+            self.context_menu.post(event.x_root, event.y_root)
+    
+    def edit_tags_notes(self):
+        """Open dialog to edit tags and notes for selected event"""
+        selection = self.event_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select an event first")
+            return
+        
+        item = selection[0]
+        index = self.event_tree.index(item)
+        event_data = self.all_events[index]
+        
+        # Open dialog
+        dialog = TagNoteDialog(self.root, event_data)
+        self.root.wait_window(dialog)
+        
+        if dialog.result:
+            # Update event data
+            event_data['tags'] = dialog.result['tags']
+            event_data['notes'] = dialog.result['notes']
+            
+            # Save metadata
+            self.save_metadata()
+            
+            # Refresh display
+            self.filter_events()
+            self.update_tags_notes_display(event_data)
+    
+    def update_tags_notes_display(self, event_data):
+        """Update the tags and notes display for current event"""
+        tags = event_data.get('tags', [])
+        notes = event_data.get('notes', '')
+        
+        if tags:
+            self.tags_label.config(text=f"🏷️ Tags: {', '.join(tags)}")
+        else:
+            self.tags_label.config(text="")
+        
+        if notes:
+            # Truncate long notes
+            display_notes = notes if len(notes) <= 50 else notes[:47] + "..."
+            self.notes_label.config(text=f"📝 {display_notes}")
+        else:
+            self.notes_label.config(text="")
+    
+    def get_event_key(self, event_data):
+        """Generate unique key for event"""
+        first_clip = event_data['clips'][0]
+        return str(first_clip)
+    
+    def load_metadata(self):
+        """Load tags and notes from JSON file"""
+        if not self.teslacam_path:
+            return
+        
+        metadata_file = self.teslacam_path / 'teslacam_metadata.json'
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r') as f:
+                    self.metadata = json.load(f)
+            except:
+                self.metadata = {}
+        else:
+            self.metadata = {}
+    
+    def save_metadata(self):
+        """Save tags and notes to JSON file"""
+        if not self.teslacam_path:
+            return
+        
+        metadata_file = self.teslacam_path / 'teslacam_metadata.json'
+        
+        # Build metadata from all events
+        metadata_to_save = {}
+        for event in self.all_events:
+            event_key = self.get_event_key(event)
+            if event.get('tags') or event.get('notes'):
+                metadata_to_save[event_key] = {
+                    'tags': event.get('tags', []),
+                    'notes': event.get('notes', '')
+                }
+        
+        try:
+            with open(metadata_file, 'w') as f:
+                json.dump(metadata_to_save, f, indent=2)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save metadata: {str(e)}")
+    
+    def export_selected_event(self):
+        """Export the selected event"""
+        selection = self.event_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select an event to export")
+            return
+        
+        item = selection[0]
+        index = self.event_tree.index(item)
+        event_clips = self.video_files[index]
+        event_data = self.all_events[index]
+        
+        self.export_event(event_clips, event_data)
+    
+    def export_current_event(self):
+        """Export the currently loaded event"""
+        if not self.current_video:
+            messagebox.showwarning("No Event", "Please select an event first")
+            return
+        
+        selection = self.event_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select an event first")
+            return
+        
+        self.export_selected_event()
+    
+    def export_event(self, event_clips, event_data):
+        """Export event as merged video file"""
+        # Ask user for save location
+        timestamp = event_data['timestamp']
+        default_name = f"TeslaCam_{timestamp.strftime('%Y%m%d_%H%M%S')}.mp4"
+        
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".mp4",
+            filetypes=[("MP4 Video", "*.mp4"), ("All Files", "*.*")],
+            initialfile=default_name
+        )
+        
+        if not save_path:
+            return
+        
+        # Create progress dialog
+        progress_dialog = ExportProgressDialog(self.root)
+        
+        # Export in separate thread
+        def export_thread():
+            try:
+                self.export_video_file(event_clips, save_path, progress_dialog)
+                progress_dialog.destroy()
+                messagebox.showinfo("Export Complete", f"Video exported successfully to:\n{save_path}")
+            except Exception as e:
+                progress_dialog.destroy()
+                messagebox.showerror("Export Failed", f"Failed to export video:\n{str(e)}")
+        
+        threading.Thread(target=export_thread, daemon=True).start()
+    
+    def export_video_file(self, event_clips, output_path, progress_dialog):
+        """Export merged 4-camera video to file"""
+        # Collect all camera clips
+        camera_clip_lists = {
+            'front': [],
+            'left': [],
+            'right': [],
+            'back': []
+        }
+        
+        for front_clip in event_clips:
+            camera_clips = self.get_camera_clips(front_clip)
+            for camera, clip_path in camera_clips.items():
+                camera_clip_lists[camera].append(clip_path)
+        
+        # Create video captures
+        captures = {}
+        for camera, clip_list in camera_clip_lists.items():
+            if clip_list:
+                multi_cap = MultiVideoCapture(clip_list)
+                if multi_cap.isOpened():
+                    captures[camera] = multi_cap
+        
+        if not captures:
+            raise Exception("No video files found to export")
+        
+        # Get video properties
+        front_cap = captures.get('front', list(captures.values())[0])
+        fps = front_cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 30.0
+        
+        total_frames = front_cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        
+        # Output video settings (4-camera grid: 960x540)
+        frame_width, frame_height = 480, 270
+        output_width, output_height = frame_width * 2, frame_height * 2
+        
+        # Create video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (output_width, output_height))
+        
+        camera_order = ['front', 'back', 'left', 'right']
+        frame_count = 0
+        
+        while True:
+            frames = {}
+            has_frames = False
+            
+            # Read from all cameras
+            for camera, cap in captures.items():
+                ret, frame = cap.read()
+                if ret:
+                    frames[camera] = frame
+                    has_frames = True
+            
+            if not has_frames:
+                break
+            
+            # Create merged frame
+            resized_frames = []
+            for camera in camera_order:
+                if camera in frames:
+                    frame = cv2.resize(frames[camera], (frame_width, frame_height))
+                    # Add camera label
+                    overlay = frame.copy()
+                    cv2.rectangle(overlay, (0, 0), (frame_width, 50), (0, 0, 0), -1)
+                    frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
+                    cv2.putText(frame, camera.upper(), (15, 32), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+                    resized_frames.append(frame)
+                else:
+                    black_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+                    resized_frames.append(black_frame)
+            
+            # Merge into grid
+            top_row = np.hstack([resized_frames[0], resized_frames[1]])
+            bottom_row = np.hstack([resized_frames[2], resized_frames[3]])
+            merged_frame = np.vstack([top_row, bottom_row])
+            
+            # Write frame
+            out.write(merged_frame)
+            
+            # Update progress
+            frame_count += 1
+            if total_frames > 0:
+                progress = (frame_count / total_frames) * 100
+                progress_dialog.update_progress(progress, f"Frame {frame_count}/{int(total_frames)}")
+        
+        # Cleanup
+        out.release()
+        for cap in captures.values():
+            cap.release()
+    
     def set_playback_speed(self, speed):
         """Set playback speed"""
         self.playback_speed = speed
@@ -456,6 +847,7 @@ class TeslaCamViewer:
             self.teslacam_path = teslacam_path
             self.folder_label.config(text=f"✓ Auto-detected: {str(teslacam_path)}", fg='#00ff00')
             self.status_label.config(text="TeslaCam folder auto-detected and loaded!")
+            self.load_metadata()
             self.refresh_file_list()
         else:
             self.folder_label.config(text="No TeslaCam folder found - Click to select manually", fg='#ff9900')
@@ -467,6 +859,7 @@ class TeslaCamViewer:
         if folder:
             self.teslacam_path = Path(folder)
             self.folder_label.config(text=str(folder), fg='#ffffff')
+            self.load_metadata()
             self.refresh_file_list()
     
     def parse_timestamp(self, filename):
@@ -617,8 +1010,17 @@ class TeslaCamViewer:
                         'duration': duration_min,
                         'type': dir_name,
                         'date': date_str,
-                        'time': time_str
+                        'time': time_str,
+                        'tags': [],
+                        'notes': ''
                     }
+                    
+                    # Load tags and notes from metadata
+                    event_key = self.get_event_key(event_data)
+                    if event_key in self.metadata:
+                        event_data['tags'] = self.metadata[event_key].get('tags', [])
+                        event_data['notes'] = self.metadata[event_key].get('notes', '')
+                    
                     self.all_events.append(event_data)
         
         # Sort all events by timestamp (newest first)
@@ -637,15 +1039,19 @@ class TeslaCamViewer:
         event_number = 1
         for event in self.all_events:
             if search_text:
-                searchable = f"{event['date']} {event['time']} {event['type']}".lower()
+                searchable = f"{event['date']} {event['time']} {event['type']} {' '.join(event.get('tags', []))}".lower()
                 if search_text not in searchable:
                     continue
+            
+            # Format tags for display
+            tags_display = ', '.join(event.get('tags', [])) if event.get('tags') else ''
             
             self.event_tree.insert('', 'end', 
                                   text=f"#{event_number}",
                                   values=(event['date'], event['time'], 
                                          f"{event['duration']} min", 
-                                         event['type'].replace('Clips', '')))
+                                         event['type'].replace('Clips', ''),
+                                         tags_display))
             self.video_files.append(event['clips'])  # Store all clips for this event
             event_number += 1
         
@@ -660,7 +1066,9 @@ class TeslaCamViewer:
             item = selection[0]
             index = self.event_tree.index(item)
             event_clips = self.video_files[index]  # Get all clips for this event
+            event_data = self.all_events[index]
             self.load_merged_video(event_clips)
+            self.update_tags_notes_display(event_data)
             
     def load_merged_video(self, front_video_clips):
         """Load all camera angles for merged playback with all clips in event"""
@@ -858,7 +1266,7 @@ class TeslaCamViewer:
     def show_about(self):
         """Show about dialog"""
         messagebox.showinfo("About TeslaCam Viewer", 
-                          "TeslaCam Viewer v2.0\n\n"
+                          "TeslaCam Viewer v2.1\n\n"
                           "A modern application for viewing Tesla dashcam footage\n\n"
                           "Features:\n"
                           "  • 4-camera synchronized playback\n"
@@ -866,11 +1274,14 @@ class TeslaCamViewer:
                           "  • Event timeline and filtering\n"
                           "  • Auto-detect TeslaCam folder\n"
                           "  • Adjustable playback speed (0.5x - 3x)\n"
+                          "  • Video export functionality\n"
+                          "  • Event tagging and notes\n"
                           "  • Modern, intuitive interface\n\n"
                           "Created by Aidan\n"
                           "GitHub: github.com/A1dqn/teslacam-viewer\n\n"
                           "Keyboard Shortcuts:\n"
                           "  • Ctrl+O: Open folder\n"
+                          "  • Ctrl+E: Export event\n"
                           "  • Space: Play/Pause\n"
                           "  • Ctrl+Q: Quit")
         
