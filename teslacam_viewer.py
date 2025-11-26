@@ -117,6 +117,7 @@ class TeslaCamViewer:
         self.is_playing = False
         self.video_files = []
         self.all_events = []
+        self.playback_delay = 28  # Default delay in ms, will be calculated from FPS
         
         # Configure style
         self.setup_style()
@@ -601,6 +602,14 @@ class TeslaCamViewer:
             self.current_video = front_video_clips[0]
             timestamp = self.parse_timestamp(front_video_clips[0])
             
+            # Calculate playback delay based on video FPS
+            if 'front' in self.video_captures:
+                fps = self.video_captures['front'].get(cv2.CAP_PROP_FPS)
+                if fps > 0:
+                    self.playback_delay = int(1000 / fps)  # Convert FPS to milliseconds per frame
+                else:
+                    self.playback_delay = 28  # Default for ~36 FPS
+            
             if timestamp:
                 self.video_title.config(text=timestamp.strftime('%A, %B %d, %Y'))
                 camera_count = len(self.video_captures)
@@ -702,7 +711,8 @@ class TeslaCamViewer:
             
             if has_frames:
                 self.show_merged_frame()
-                self.root.after(16, self.play_video)  # ~60 FPS (16ms delay)
+                # Use calculated delay based on actual video FPS
+                self.root.after(self.playback_delay, self.play_video)
             else:
                 self.is_playing = False
                 self.play_button.config(text="▶ Play")
