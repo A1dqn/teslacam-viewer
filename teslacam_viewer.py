@@ -115,6 +115,14 @@ class TagNoteDialog(tk.Toplevel):
         self.geometry("500x400")
         self.configure(bg='#2d2d2d')
         
+        # Set icon if it exists
+        try:
+            icon_path = Path(__file__).parent / 'icon.ico'
+            if icon_path.exists():
+                self.iconbitmap(str(icon_path))
+        except:
+            pass
+        
         self.event_data = event_data
         self.result = None
         
@@ -192,6 +200,14 @@ class ExportProgressDialog(tk.Toplevel):
         self.geometry("400x150")
         self.configure(bg='#2d2d2d')
         
+        # Set icon if it exists
+        try:
+            icon_path = Path(__file__).parent / 'icon.ico'
+            if icon_path.exists():
+                self.iconbitmap(str(icon_path))
+        except:
+            pass
+        
         tk.Label(self, text="Exporting video...", bg='#2d2d2d', fg='#ffffff',
                 font=('Segoe UI', 12, 'bold')).pack(pady=(20, 10))
         
@@ -219,6 +235,14 @@ class TeslaCamViewer:
         self.root = root
         self.root.title("TeslaCam Viewer")
         self.root.geometry("1400x900")
+        
+        # Set icon if it exists
+        try:
+            icon_path = Path(__file__).parent / 'icon.ico'
+            if icon_path.exists():
+                self.root.iconbitmap(str(icon_path))
+        except:
+            pass
         
         # Variables
         self.teslacam_path = None
@@ -686,7 +710,7 @@ class TeslaCamViewer:
         threading.Thread(target=export_thread, daemon=True).start()
     
     def export_video_file(self, event_clips, output_path, progress_dialog):
-        """Export merged 4-camera video to file"""
+        """Export merged 4-camera video to file (OPTIMIZED)"""
         # Collect all camera clips
         camera_clip_lists = {
             'front': [],
@@ -719,20 +743,29 @@ class TeslaCamViewer:
         
         total_frames = front_cap.get(cv2.CAP_PROP_FRAME_COUNT)
         
-        # Output video settings (4-camera grid: 960x540)
-        frame_width, frame_height = 480, 270
+        # OPTIMIZED: Use smaller resolution for faster export
+        # Output video settings (4-camera grid: 1280x720 instead of 1920x1080)
+        frame_width, frame_height = 320, 180  # Reduced from 480x270
         output_width, output_height = frame_width * 2, frame_height * 2
         
-        # Create video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        # Use H.264 codec for better compression and speed
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec
         out = cv2.VideoWriter(output_path, fourcc, fps, (output_width, output_height))
         
         camera_order = ['front', 'back', 'left', 'right']
         frame_count = 0
+        skip_frames = 0  # Skip every Nth frame for even faster export
         
         while True:
             frames = {}
             has_frames = False
+            
+            # OPTIMIZATION: Skip frames for faster export
+            if skip_frames > 0:
+                for _ in range(skip_frames):
+                    for camera, cap in captures.items():
+                        cap.read()  # Just read and discard
+                frame_count += skip_frames
             
             # Read from all cameras
             for camera, cap in captures.items():
@@ -751,10 +784,10 @@ class TeslaCamViewer:
                     frame = cv2.resize(frames[camera], (frame_width, frame_height))
                     # Add camera label
                     overlay = frame.copy()
-                    cv2.rectangle(overlay, (0, 0), (frame_width, 50), (0, 0, 0), -1)
+                    cv2.rectangle(overlay, (0, 0), (frame_width, 30), (0, 0, 0), -1)
                     frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
-                    cv2.putText(frame, camera.upper(), (15, 32), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+                    cv2.putText(frame, camera.upper(), (10, 20), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
                     resized_frames.append(frame)
                 else:
                     black_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
@@ -770,7 +803,7 @@ class TeslaCamViewer:
             
             # Update progress
             frame_count += 1
-            if total_frames > 0:
+            if total_frames > 0 and frame_count % 30 == 0:  # Update every 30 frames for performance
                 progress = (frame_count / total_frames) * 100
                 progress_dialog.update_progress(progress, f"Frame {frame_count}/{int(total_frames)}")
         
