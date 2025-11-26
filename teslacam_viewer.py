@@ -108,7 +108,7 @@ class TeslaCamViewer:
     def __init__(self, root):
         self.root = root
         self.root.title("TeslaCam Viewer")
-        self.root.geometry("1200x800")
+        self.root.geometry("1400x900")
         
         # Variables
         self.teslacam_path = None
@@ -116,96 +116,246 @@ class TeslaCamViewer:
         self.video_captures = {}  # Dictionary to hold all 4 camera captures
         self.is_playing = False
         self.video_files = []
+        self.all_events = []  # Store all event data
+        
+        # Configure style
+        self.setup_style()
         
         # Setup UI
         self.setup_ui()
         
+    def setup_style(self):
+        """Configure modern styling"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Colors
+        bg_color = '#1e1e1e'
+        fg_color = '#ffffff'
+        accent_color = '#007acc'
+        hover_color = '#005a9e'
+        
+        # Configure Treeview
+        style.configure('Treeview',
+                       background='#2d2d2d',
+                       foreground=fg_color,
+                       fieldbackground='#2d2d2d',
+                       borderwidth=0,
+                       font=('Segoe UI', 10))
+        style.map('Treeview', background=[('selected', accent_color)])
+        
+        # Configure Treeview headings
+        style.configure('Treeview.Heading',
+                       background='#3c3c3c',
+                       foreground=fg_color,
+                       borderwidth=0,
+                       font=('Segoe UI', 10, 'bold'))
+        style.map('Treeview.Heading', background=[('active', hover_color)])
+        
     def setup_ui(self):
         """Initialize the user interface"""
+        # Configure root window
+        self.root.configure(bg='#1e1e1e')
+        
         # Menu bar
-        menubar = tk.Menu(self.root)
+        menubar = tk.Menu(self.root, bg='#2d2d2d', fg='#ffffff')
         self.root.config(menu=menubar)
         
-        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu = tk.Menu(menubar, tearoff=0, bg='#2d2d2d', fg='#ffffff')
         menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Open TeslaCam Folder", command=self.open_folder)
+        file_menu.add_command(label="Open TeslaCam Folder...", command=self.open_folder, accelerator="Ctrl+O")
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.quit)
+        file_menu.add_command(label="Exit", command=self.root.quit, accelerator="Ctrl+Q")
         
-        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu = tk.Menu(menubar, tearoff=0, bg='#2d2d2d', fg='#ffffff')
         menubar.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(label="About", command=self.show_about)
         
+        # Keyboard shortcuts
+        self.root.bind('<Control-o>', lambda e: self.open_folder())
+        self.root.bind('<Control-q>', lambda e: self.root.quit())
+        self.root.bind('<space>', lambda e: self.toggle_playback())
+        
+        # Top toolbar
+        toolbar = tk.Frame(self.root, bg='#2d2d2d', height=60)
+        toolbar.pack(side=tk.TOP, fill=tk.X, padx=0, pady=0)
+        
+        # Open folder button
+        open_btn = tk.Button(toolbar, text="📁 Open TeslaCam Folder", 
+                            command=self.open_folder,
+                            bg='#007acc', fg='#ffffff', 
+                            font=('Segoe UI', 11, 'bold'),
+                            relief=tk.FLAT, padx=20, pady=10,
+                            cursor='hand2')
+        open_btn.pack(side=tk.LEFT, padx=15, pady=10)
+        
+        # Folder path label
+        self.folder_label = tk.Label(toolbar, text="No folder selected", 
+                                    bg='#2d2d2d', fg='#888888',
+                                    font=('Segoe UI', 10))
+        self.folder_label.pack(side=tk.LEFT, padx=10)
+        
         # Main container
-        main_container = ttk.Frame(self.root)
-        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        main_container = tk.Frame(self.root, bg='#1e1e1e')
+        main_container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
         
-        # Left panel - File browser
-        left_panel = ttk.Frame(main_container, width=300)
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 10))
+        # Left panel - Event browser
+        left_panel = tk.Frame(main_container, bg='#252525', width=500)
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, padx=0, pady=0)
         
-        ttk.Label(left_panel, text="TeslaCam Recordings", font=("Arial", 12, "bold")).pack(pady=5)
+        # Search and filter section
+        filter_container = tk.Frame(left_panel, bg='#252525')
+        filter_container.pack(fill=tk.X, padx=15, pady=15)
         
-        # Folder type filter
-        filter_frame = ttk.Frame(left_panel)
-        filter_frame.pack(fill=tk.X, pady=5)
+        tk.Label(filter_container, text="Filter Events", 
+                bg='#252525', fg='#ffffff',
+                font=('Segoe UI', 12, 'bold')).pack(anchor='w', pady=(0, 10))
+        
+        # Filter buttons
+        filter_frame = tk.Frame(filter_container, bg='#252525')
+        filter_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.folder_type = tk.StringVar(value="All")
-        ttk.Radiobutton(filter_frame, text="All", variable=self.folder_type, 
-                       value="All", command=self.refresh_file_list).pack(side=tk.LEFT)
-        ttk.Radiobutton(filter_frame, text="Saved", variable=self.folder_type, 
-                       value="SavedClips", command=self.refresh_file_list).pack(side=tk.LEFT)
-        ttk.Radiobutton(filter_frame, text="Sentry", variable=self.folder_type, 
-                       value="SentryClips", command=self.refresh_file_list).pack(side=tk.LEFT)
         
-        # File listbox with scrollbar
-        list_frame = ttk.Frame(left_panel)
-        list_frame.pack(fill=tk.BOTH, expand=True)
+        filter_options = [
+            ("All Events", "All"),
+            ("💾 Saved", "SavedClips"),
+            ("🛡️ Sentry", "SentryClips"),
+            ("🕐 Recent", "RecentClips")
+        ]
         
-        scrollbar = ttk.Scrollbar(list_frame)
+        for text, value in filter_options:
+            btn = tk.Radiobutton(filter_frame, text=text, variable=self.folder_type,
+                                value=value, command=self.refresh_file_list,
+                                bg='#252525', fg='#ffffff', 
+                                selectcolor='#007acc',
+                                font=('Segoe UI', 10),
+                                activebackground='#252525',
+                                activeforeground='#ffffff',
+                                cursor='hand2')
+            btn.pack(side=tk.LEFT, padx=(0, 15))
+        
+        # Search box
+        search_frame = tk.Frame(filter_container, bg='#252525')
+        search_frame.pack(fill=tk.X)
+        
+        tk.Label(search_frame, text="Search:", bg='#252525', fg='#ffffff',
+                font=('Segoe UI', 10)).pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', lambda *args: self.filter_events())
+        search_entry = tk.Entry(search_frame, textvariable=self.search_var,
+                               bg='#3c3c3c', fg='#ffffff',
+                               font=('Segoe UI', 10),
+                               insertbackground='#ffffff',
+                               relief=tk.FLAT)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        
+        # Event list with Treeview
+        list_container = tk.Frame(left_panel, bg='#252525')
+        list_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
+        
+        # Column headers
+        columns = ('date', 'time', 'duration', 'type')
+        self.event_tree = ttk.Treeview(list_container, columns=columns, 
+                                       show='tree headings', selectmode='browse')
+        
+        # Define columns
+        self.event_tree.heading('#0', text='Event')
+        self.event_tree.heading('date', text='Date')
+        self.event_tree.heading('time', text='Time')
+        self.event_tree.heading('duration', text='Duration')
+        self.event_tree.heading('type', text='Type')
+        
+        self.event_tree.column('#0', width=50, minwidth=50)
+        self.event_tree.column('date', width=100, minwidth=80)
+        self.event_tree.column('time', width=100, minwidth=80)
+        self.event_tree.column('duration', width=80, minwidth=60)
+        self.event_tree.column('type', width=80, minwidth=60)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(list_container, orient='vertical', command=self.event_tree.yview)
+        self.event_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.event_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.file_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set)
-        self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.file_listbox.bind('<<ListboxSelect>>', self.on_file_select)
-        scrollbar.config(command=self.file_listbox.yview)
+        self.event_tree.bind('<<TreeviewSelect>>', self.on_event_select)
         
         # Right panel - Video player
-        right_panel = ttk.Frame(main_container)
-        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        right_panel = tk.Frame(main_container, bg='#1e1e1e')
+        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=15, pady=15)
+        
+        # Video info section
+        info_frame = tk.Frame(right_panel, bg='#1e1e1e')
+        info_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.video_title = tk.Label(info_frame, text="No event selected",
+                                    bg='#1e1e1e', fg='#ffffff',
+                                    font=('Segoe UI', 14, 'bold'),
+                                    anchor='w')
+        self.video_title.pack(side=tk.LEFT)
+        
+        self.video_info = tk.Label(info_frame, text="",
+                                   bg='#1e1e1e', fg='#888888',
+                                   font=('Segoe UI', 10),
+                                   anchor='w')
+        self.video_info.pack(side=tk.LEFT, padx=(15, 0))
         
         # Video display area
-        self.video_frame = ttk.Label(right_panel, text="Select a video to play", 
-                                     relief=tk.SUNKEN, background="black", 
-                                     foreground="white", font=("Arial", 14))
-        self.video_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        video_container = tk.Frame(right_panel, bg='#000000', relief=tk.SUNKEN, bd=2)
+        video_container.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        self.video_frame = tk.Label(video_container, text="Select an event to play", 
+                                    background="#000000", 
+                                    foreground="#666666", 
+                                    font=("Segoe UI", 16))
+        self.video_frame.pack(fill=tk.BOTH, expand=True)
         
         # Controls frame
-        controls_frame = ttk.Frame(right_panel)
+        controls_frame = tk.Frame(right_panel, bg='#2d2d2d')
         controls_frame.pack(fill=tk.X)
         
         # Playback controls
-        button_frame = ttk.Frame(controls_frame)
-        button_frame.pack(pady=5)
+        button_frame = tk.Frame(controls_frame, bg='#2d2d2d')
+        button_frame.pack(pady=15)
         
-        self.play_button = ttk.Button(button_frame, text="▶ Play", command=self.toggle_playback)
+        self.play_button = tk.Button(button_frame, text="▶ Play", 
+                                     command=self.toggle_playback,
+                                     bg='#007acc', fg='#ffffff',
+                                     font=('Segoe UI', 11, 'bold'),
+                                     relief=tk.FLAT, padx=20, pady=8,
+                                     cursor='hand2')
         self.play_button.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(button_frame, text="⏹ Stop", command=self.stop_video).pack(side=tk.LEFT, padx=5)
+        stop_btn = tk.Button(button_frame, text="⏹ Stop", 
+                            command=self.stop_video,
+                            bg='#3c3c3c', fg='#ffffff',
+                            font=('Segoe UI', 11),
+                            relief=tk.FLAT, padx=20, pady=8,
+                            cursor='hand2')
+        stop_btn.pack(side=tk.LEFT, padx=5)
         
         # Progress bar
+        progress_frame = tk.Frame(controls_frame, bg='#2d2d2d')
+        progress_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
+        
         self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Scale(controls_frame, from_=0, to=100, 
+        self.progress_bar = ttk.Scale(progress_frame, from_=0, to=100, 
                                       orient=tk.HORIZONTAL, variable=self.progress_var,
                                       command=self.seek_video)
-        self.progress_bar.pack(fill=tk.X, padx=5, pady=5)
+        self.progress_bar.pack(fill=tk.X)
         
         # Time label
-        self.time_label = ttk.Label(controls_frame, text="00:00 / 00:00")
-        self.time_label.pack()
+        self.time_label = tk.Label(controls_frame, text="00:00 / 00:00",
+                                   bg='#2d2d2d', fg='#ffffff',
+                                   font=('Segoe UI', 10))
+        self.time_label.pack(pady=(0, 10))
         
         # Status bar
-        self.status_label = ttk.Label(self.root, text="Ready", relief=tk.SUNKEN)
+        self.status_label = tk.Label(self.root, text="Ready - Open a TeslaCam folder to begin", 
+                                    relief=tk.FLAT, bg='#2d2d2d', fg='#888888',
+                                    font=('Segoe UI', 9), anchor='w', padx=15)
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
         
     def open_folder(self):
@@ -213,8 +363,8 @@ class TeslaCamViewer:
         folder = filedialog.askdirectory(title="Select TeslaCam Folder")
         if folder:
             self.teslacam_path = Path(folder)
+            self.folder_label.config(text=str(folder), fg='#ffffff')
             self.refresh_file_list()
-            self.status_label.config(text=f"Loaded: {folder}")
     
     def parse_timestamp(self, filename):
         """Parse timestamp from TeslaCam filename"""
@@ -303,9 +453,16 @@ class TeslaCamViewer:
         """Refresh the list of video files"""
         if not self.teslacam_path:
             return
+        
+        self.status_label.config(text="Loading events...")
+        self.root.update()
             
-        self.file_listbox.delete(0, tk.END)
+        # Clear existing items
+        for item in self.event_tree.get_children():
+            self.event_tree.delete(item)
+        
         self.video_files = []
+        self.all_events = []
         
         folder_type = self.folder_type.get()
         
@@ -338,11 +495,11 @@ class TeslaCamViewer:
         
         # Group sequential clips and only show the first clip of each event
         seen_events = set()
+        event_number = 1
         
         for video_file, dir_name, timestamp in video_data:
             if timestamp:
                 # Round timestamp to find event groups (clips within same event)
-                # We'll identify unique events by checking if we've seen a clip within +/- 30 seconds
                 event_key = None
                 for seen_time in seen_events:
                     if abs((timestamp - seen_time).total_seconds()) <= 90:  # Within 1.5 minutes
@@ -357,27 +514,63 @@ class TeslaCamViewer:
                     if first_clip_time and first_clip_time not in seen_events:
                         seen_events.add(first_clip_time)
                         
-                        # Display with clip count
+                        # Format data for display
                         duration_min = len(sequential_clips)
-                        display_name = f"[{dir_name[:6]}] {first_clip_time.strftime('%m/%d/%Y %I:%M:%S %p')} ({duration_min} min)"
+                        date_str = first_clip_time.strftime('%m/%d/%Y')
+                        time_str = first_clip_time.strftime('%I:%M:%S %p')
+                        duration_str = f"{duration_min} min"
+                        type_str = dir_name.replace('Clips', '')
                         
-                        self.file_listbox.insert(tk.END, display_name)
-                        self.video_files.append(sequential_clips[0])  # Store first clip as reference
-            else:
-                # Fallback for files without parseable timestamp
-                display_name = f"[{dir_name[:6]}] {video_file.stem}"
-                self.file_listbox.insert(tk.END, display_name)
-                self.video_files.append(video_file)
+                        # Store event data
+                        event_data = {
+                            'path': sequential_clips[0],
+                            'timestamp': first_clip_time,
+                            'duration': duration_min,
+                            'type': dir_name,
+                            'date': date_str,
+                            'time': time_str
+                        }
+                        self.all_events.append(event_data)
         
-        # Update status
+        # Apply filter and populate tree
+        self.filter_events()
+        
+    def filter_events(self):
+        """Filter events based on search text"""
+        # Clear tree
+        for item in self.event_tree.get_children():
+            self.event_tree.delete(item)
+        
+        self.video_files = []
+        search_text = self.search_var.get().lower()
+        
+        event_number = 1
+        for event in self.all_events:
+            # Apply search filter
+            if search_text:
+                searchable = f"{event['date']} {event['time']} {event['type']}".lower()
+                if search_text not in searchable:
+                    continue
+            
+            # Insert into tree
+            self.event_tree.insert('', 'end', 
+                                  text=f"#{event_number}",
+                                  values=(event['date'], event['time'], 
+                                         f"{event['duration']} min", 
+                                         event['type'].replace('Clips', '')))
+            self.video_files.append(event['path'])
+            event_number += 1
+        
         count = len(self.video_files)
+        folder_type = self.folder_type.get()
         self.status_label.config(text=f"Found {count} event(s) in {folder_type}")
                     
-    def on_file_select(self, event):
-        """Handle file selection from listbox"""
-        selection = self.file_listbox.curselection()
+    def on_event_select(self, event):
+        """Handle event selection from tree"""
+        selection = self.event_tree.selection()
         if selection:
-            index = selection[0]
+            item = selection[0]
+            index = self.event_tree.index(item)
             video_path = self.video_files[index]
             self.load_merged_video(video_path)
             
@@ -406,12 +599,18 @@ class TeslaCamViewer:
         
         if self.video_captures:
             self.current_video = front_video_path
-            camera_count = len(self.video_captures)
-            duration_min = total_clips
-            self.status_label.config(text=f"Loaded: {front_video_path.stem} ({camera_count} cameras, {duration_min} min)")
+            timestamp = self.parse_timestamp(front_video_path)
+            
+            # Update UI
+            if timestamp:
+                self.video_title.config(text=timestamp.strftime('%A, %B %d, %Y'))
+                camera_count = len(self.video_captures)
+                self.video_info.config(text=f"🕐 {timestamp.strftime('%I:%M:%S %p')} • 📹 {camera_count} cameras • ⏱️ {total_clips} minutes")
+            
             self.is_playing = False
             self.play_button.config(text="▶ Play")
             self.show_merged_frame()
+            self.status_label.config(text=f"Ready to play - {total_clips} minute event with {len(self.video_captures)} camera angles")
         else:
             messagebox.showerror("Error", f"Could not open any video files")
             
@@ -452,8 +651,14 @@ class TeslaCamViewer:
         
         # Add text labels to each frame
         for i, (frame, label) in enumerate(zip(resized_frames, labels)):
-            cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            # Add semi-transparent background for text
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (frame_width, 50), (0, 0, 0), -1)
+            frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
+            
+            cv2.putText(frame, label, (15, 32), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.9, (255, 255, 255), 2, cv2.LINE_AA)
+            resized_frames[i] = frame
         
         # Create 2x2 grid: [Front, Back]
         #                   [Left,  Right]
@@ -488,7 +693,7 @@ class TeslaCamViewer:
     def toggle_playback(self):
         """Toggle play/pause"""
         if not self.video_captures:
-            messagebox.showwarning("No Video", "Please select a video first")
+            messagebox.showwarning("No Video", "Please select an event first")
             return
             
         self.is_playing = not self.is_playing
@@ -545,15 +750,20 @@ class TeslaCamViewer:
                 
     def show_about(self):
         """Show about dialog"""
-        messagebox.showinfo("About", 
+        messagebox.showinfo("About TeslaCam Viewer", 
                           "TeslaCam Viewer v2.0\n\n"
-                          "A Python application for viewing Tesla dashcam footage.\n\n"
+                          "A modern application for viewing Tesla dashcam footage\n\n"
                           "Features:\n"
-                          "- 4-camera merged view\n"
-                          "- Synchronized playback\n"
-                          "- Automatic clip stitching\n\n"
+                          "  • 4-camera synchronized playback\n"
+                          "  • Automatic clip stitching\n"
+                          "  • Event timeline and filtering\n"
+                          "  • Modern, intuitive interface\n\n"
                           "Created by Aidan\n"
-                          "GitHub: github.com/A1dqn/teslacam-viewer")
+                          "GitHub: github.com/A1dqn/teslacam-viewer\n\n"
+                          "Keyboard Shortcuts:\n"
+                          "  • Ctrl+O: Open folder\n"
+                          "  • Space: Play/Pause\n"
+                          "  • Ctrl+Q: Quit")
         
     def __del__(self):
         """Cleanup on exit"""
