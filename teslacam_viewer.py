@@ -369,7 +369,6 @@ class TeslaCamViewer:
     def parse_timestamp(self, filename):
         """Parse timestamp from TeslaCam filename"""
         try:
-            # TeslaCam format: YYYY-MM-DD_HH-MM-SS-front.mp4
             stem = filename.stem
             for camera in ['-front', '-left_repeater', '-right_repeater', '-back']:
                 if camera in stem:
@@ -388,56 +387,25 @@ class TeslaCamViewer:
             pass
         return None
     
-    def get_sequential_clips(self, base_video_path, camera_type):
-        """Get all sequential 1-minute clips for a camera to form complete event"""
+    def get_all_clips_in_folder(self, base_video_path, camera_type):
+        """Get ALL clips in the same folder/subfolder for this camera"""
         parent_dir = base_video_path.parent
-        base_timestamp = self.parse_timestamp(base_video_path)
         
-        if not base_timestamp:
-            return [base_video_path]
+        # Find all clips for this camera type in the same folder
+        pattern = f"*-{camera_type}.mp4"
+        all_clips = list(parent_dir.glob(pattern))
         
-        sequential_clips = []
-        checked_times = set()
+        # Sort by timestamp
+        clips_with_time = []
+        for clip in all_clips:
+            timestamp = self.parse_timestamp(clip)
+            if timestamp:
+                clips_with_time.append((clip, timestamp))
         
-        # Look backwards for earlier clips (up to 60 minutes)
-        current_time = base_timestamp
-        for _ in range(60):  # Check up to 60 minutes back
-            prev_time = current_time - timedelta(minutes=1)
-            if prev_time in checked_times:
-                break
-            checked_times.add(prev_time)
-            
-            prev_filename = f"{prev_time.strftime('%Y-%m-%d_%H-%M-%S')}-{camera_type}.mp4"
-            prev_path = parent_dir / prev_filename
-            
-            if prev_path.exists():
-                sequential_clips.insert(0, prev_path)
-                current_time = prev_time
-            else:
-                break
+        # Sort by time
+        clips_with_time.sort(key=lambda x: x[1])
         
-        # Add the base clip
-        sequential_clips.append(base_video_path)
-        checked_times.add(base_timestamp)
-        
-        # Look forward for later clips (up to 60 minutes)
-        current_time = base_timestamp
-        for _ in range(60):  # Check up to 60 minutes forward
-            next_time = current_time + timedelta(minutes=1)
-            if next_time in checked_times:
-                break
-            checked_times.add(next_time)
-            
-            next_filename = f"{next_time.strftime('%Y-%m-%d_%H-%M-%S')}-{camera_type}.mp4"
-            next_path = parent_dir / next_filename
-            
-            if next_path.exists():
-                sequential_clips.append(next_path)
-                current_time = next_time
-            else:
-                break
-        
-        return sequential_clips
+        return [clip for clip, _ in clips_with_time]
     
     def get_camera_clips(self, front_video_path):
         """Get all camera clips for a given event"""
@@ -469,7 +437,8 @@ class TeslaCamViewer:
         
         folder_type = self.folder_type.get()
         
-        video_data = []
+        # Collect all clips by folder/subfolder
+        folder_clips = {}  # key: folder path, value: list of (clip, timestamp, dir_name)
         
         if folder_type == "All":
             search_dirs = ["SavedClips", "SentryClips", "RecentClips"]
@@ -479,51 +448,78 @@ class TeslaCamViewer:
         for dir_name in search_dirs:
             dir_path = self.teslacam_path / dir_name
             if dir_path.exists():
+                # Search in main folder
                 for video_file in dir_path.glob("*-front.mp4"):
                     timestamp = self.parse_timestamp(video_file)
-                    video_data.append((video_file, dir_name, timestamp))
+                    folder_key = str(video_file.parent)
+                    if folder_key not in folder_clips:
+                        folder_clips[folder_key] = []
+                    folder_clips[folder_key].append((video_file, timestamp, dir_name))
                 
+                # Search in subdirectories
                 for subdir in dir_path.iterdir():
                     if subdir.is_dir():
                         for video_file in subdir.glob("*-front.mp4"):
                             timestamp = self.parse_timestamp(video_file)
-                            video_data.append((video_file, dir_name, timestamp))
+                            folder_key = str(video_file.parent)
+                            if folder_key not in folder_clips:
+                                folder_clips[folder_key] = []
+                            folder_clips[folder_key].append((video_file, timestamp, dir_name))
         
-        video_data.sort(key=lambda x: x[2] if x[2] else datetime.min, reverse=True)
-        
-        # Group events by finding first clip of each sequence
-        processed_timestamps = set()
-        
-        for video_file, dir_name, timestamp in video_data:
-            if timestamp and timestamp not in processed_timestamps:
-                # Get all sequential clips starting from this one
-                sequential_clips = self.get_sequential_clips(video_file, 'front')
-                
-                # Mark all timestamps in this sequence as processed
-                for clip in sequential_clips:
-                    clip_time = self.parse_timestamp(clip)
-                    if clip_time:
-                        processed_timestamps.add(clip_time)
-                
-                # Use the first clip's timestamp for display
-                first_clip_time = self.parse_timestamp(sequential_clips[0])
-                
-                if first_clip_time:
-                    duration_min = len(sequential_clips)
-                    date_str = first_clip_time.strftime('%m/%d/%Y')
-                    time_str = first_clip_time.strftime('%I:%M:%S %p')
+        # Group clips in each folder by time proximity
+        for folder_path, clips in folder_clips.items():
+            # Sort by timestamp
+            clips.sort(key=lambda x: x[1] if x[1] else datetime.min)
+            
+            # Group clips that are within 15 minutes of each other
+            events = []
+            current_event = []
+            
+            for clip, timestamp, dir_name in clips:
+                if not timestamp:
+                    continue
+                    
+                if not current_event:
+                    current_event.append((clip, timestamp, dir_name))
+                else:
+                    # Check if this clip is within 15 minutes of the previous one
+                    last_timestamp = current_event[-1][1]
+                    if (timestamp - last_timestamp).total_seconds() <= 900:  # 15 minutes
+                        current_event.append((clip, timestamp, dir_name))
+                    else:
+                        # Start new event
+                        events.append(current_event)
+                        current_event = [(clip, timestamp, dir_name)]
+            
+            if current_event:
+                events.append(current_event)
+            
+            # Create event entries
+            for event_clips in events:
+                if event_clips:
+                    first_clip, first_time, dir_name = event_clips[0]
+                    
+                    duration_min = len(event_clips)
+                    date_str = first_time.strftime('%m/%d/%Y')
+                    time_str = first_time.strftime('%I:%M:%S %p')
                     duration_str = f"{duration_min} min"
                     type_str = dir_name.replace('Clips', '')
                     
+                    # Store all clips for this event
+                    all_clip_paths = [clip for clip, _, _ in event_clips]
+                    
                     event_data = {
-                        'path': sequential_clips[0],
-                        'timestamp': first_clip_time,
+                        'clips': all_clip_paths,  # All clips in this event
+                        'timestamp': first_time,
                         'duration': duration_min,
                         'type': dir_name,
                         'date': date_str,
                         'time': time_str
                     }
                     self.all_events.append(event_data)
+        
+        # Sort all events by timestamp (newest first)
+        self.all_events.sort(key=lambda x: x['timestamp'], reverse=True)
         
         self.filter_events()
         
@@ -547,7 +543,7 @@ class TeslaCamViewer:
                                   values=(event['date'], event['time'], 
                                          f"{event['duration']} min", 
                                          event['type'].replace('Clips', '')))
-            self.video_files.append(event['path'])
+            self.video_files.append(event['clips'])  # Store all clips for this event
             event_number += 1
         
         count = len(self.video_files)
@@ -560,32 +556,50 @@ class TeslaCamViewer:
         if selection:
             item = selection[0]
             index = self.event_tree.index(item)
-            video_path = self.video_files[index]
-            self.load_merged_video(video_path)
+            event_clips = self.video_files[index]  # Get all clips for this event
+            self.load_merged_video(event_clips)
             
-    def load_merged_video(self, front_video_path):
-        """Load all camera angles for merged playback with sequential clip stitching"""
+    def load_merged_video(self, front_video_clips):
+        """Load all camera angles for merged playback with all clips in event"""
         for cap in self.video_captures.values():
             if isinstance(cap, MultiVideoCapture):
                 cap.release()
         self.video_captures.clear()
         
-        camera_clips = self.get_camera_clips(front_video_path)
+        # For each camera, get corresponding clips
+        camera_clip_lists = {
+            'front': [],
+            'left': [],
+            'right': [],
+            'back': []
+        }
         
-        total_clips = 0
-        for camera, path in camera_clips.items():
-            camera_type = camera if camera == 'front' or camera == 'back' else f"{camera}_repeater"
-            sequential_clips = self.get_sequential_clips(path, camera_type)
+        # Collect all clips for each camera
+        for front_clip in front_video_clips:
+            camera_clips = self.get_camera_clips(front_clip)
             
-            if sequential_clips:
-                multi_cap = MultiVideoCapture(sequential_clips)
+            for camera, clip_path in camera_clips.items():
+                if camera == 'front':
+                    camera_clip_lists['front'].append(clip_path)
+                elif camera == 'left':
+                    camera_clip_lists['left'].append(clip_path)
+                elif camera == 'right':
+                    camera_clip_lists['right'].append(clip_path)
+                elif camera == 'back':
+                    camera_clip_lists['back'].append(clip_path)
+        
+        # Create MultiVideoCapture for each camera that has clips
+        total_clips = 0
+        for camera, clip_list in camera_clip_lists.items():
+            if clip_list:
+                multi_cap = MultiVideoCapture(clip_list)
                 if multi_cap.isOpened():
                     self.video_captures[camera] = multi_cap
-                    total_clips = max(total_clips, len(sequential_clips))
+                    total_clips = max(total_clips, len(clip_list))
         
         if self.video_captures:
-            self.current_video = front_video_path
-            timestamp = self.parse_timestamp(front_video_path)
+            self.current_video = front_video_clips[0]
+            timestamp = self.parse_timestamp(front_video_clips[0])
             
             if timestamp:
                 self.video_title.config(text=timestamp.strftime('%A, %B %d, %Y'))
