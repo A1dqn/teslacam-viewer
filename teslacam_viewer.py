@@ -11,9 +11,97 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 import cv2
 from PIL import Image, ImageTk
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import numpy as np
+
+
+class MultiVideoCapture:
+    """Handles playback across multiple sequential video clips"""
+    def __init__(self, video_paths):
+        self.video_paths = video_paths
+        self.current_clip_index = 0
+        self.current_capture = None
+        self.total_frames = 0
+        self.frame_offsets = []  # Starting frame number for each clip
+        
+        # Calculate total frames and offsets
+        current_offset = 0
+        for path in video_paths:
+            self.frame_offsets.append(current_offset)
+            cap = cv2.VideoCapture(str(path))
+            if cap.isOpened():
+                frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                self.total_frames += frames
+                cap.release()
+            current_offset = self.total_frames
+        
+        # Open first clip
+        if self.video_paths:
+            self.current_capture = cv2.VideoCapture(str(self.video_paths[0]))
+    
+    def isOpened(self):
+        return self.current_capture is not None and self.current_capture.isOpened()
+    
+    def read(self):
+        """Read next frame, automatically transitioning between clips"""
+        if not self.current_capture or not self.current_capture.isOpened():
+            return False, None
+        
+        ret, frame = self.current_capture.read()
+        
+        # If current clip ended, move to next clip
+        if not ret and self.current_clip_index < len(self.video_paths) - 1:
+            self.current_capture.release()
+            self.current_clip_index += 1
+            self.current_capture = cv2.VideoCapture(str(self.video_paths[self.current_clip_index]))
+            ret, frame = self.current_capture.read()
+        
+        return ret, frame
+    
+    def get(self, prop):
+        """Get video property"""
+        if prop == cv2.CAP_PROP_FRAME_COUNT:
+            return self.total_frames
+        elif prop == cv2.CAP_PROP_POS_FRAMES:
+            # Current position = offset of current clip + position within clip
+            if self.current_capture and self.current_capture.isOpened():
+                clip_pos = self.current_capture.get(cv2.CAP_PROP_POS_FRAMES)
+                return self.frame_offsets[self.current_clip_index] + clip_pos
+            return 0
+        elif self.current_capture:
+            return self.current_capture.get(prop)
+        return 0
+    
+    def set(self, prop, value):
+        """Set video property (mainly for seeking)"""
+        if prop == cv2.CAP_PROP_POS_FRAMES:
+            # Find which clip this frame belongs to
+            target_frame = int(value)
+            
+            for i, offset in enumerate(self.frame_offsets):
+                if i == len(self.frame_offsets) - 1 or target_frame < self.frame_offsets[i + 1]:
+                    # This is the correct clip
+                    if i != self.current_clip_index:
+                        # Switch to this clip
+                        if self.current_capture:
+                            self.current_capture.release()
+                        self.current_clip_index = i
+                        self.current_capture = cv2.VideoCapture(str(self.video_paths[i]))
+                    
+                    # Seek within the clip
+                    if self.current_capture and self.current_capture.isOpened():
+                        local_frame = target_frame - offset
+                        self.current_capture.set(cv2.CAP_PROP_POS_FRAMES, local_frame)
+                    break
+        elif self.current_capture:
+            self.current_capture.set(prop, value)
+    
+    def release(self):
+        """Release all resources"""
+        if self.current_capture:
+            self.current_capture.release()
+            self.current_capture = None
 
 
 class TeslaCamViewer:
@@ -152,6 +240,49 @@ class TeslaCamViewer:
             pass
         return None
     
+    def get_sequential_clips(self, base_video_path, camera_type):
+        """Get all sequential 1-minute clips for a camera to form complete event"""
+        parent_dir = base_video_path.parent
+        base_timestamp = self.parse_timestamp(base_video_path)
+        
+        if not base_timestamp:
+            return [base_video_path]
+        
+        sequential_clips = []
+        
+        # Look backwards for earlier clips
+        current_time = base_timestamp
+        while True:
+            # Look for clip 1 minute earlier
+            prev_time = current_time - timedelta(minutes=1)
+            prev_filename = f"{prev_time.strftime('%Y-%m-%d_%H-%M-%S')}-{camera_type}.mp4"
+            prev_path = parent_dir / prev_filename
+            
+            if prev_path.exists():
+                sequential_clips.insert(0, prev_path)
+                current_time = prev_time
+            else:
+                break
+        
+        # Add the base clip
+        sequential_clips.append(base_video_path)
+        
+        # Look forward for later clips
+        current_time = base_timestamp
+        while True:
+            # Look for clip 1 minute later
+            next_time = current_time + timedelta(minutes=1)
+            next_filename = f"{next_time.strftime('%Y-%m-%d_%H-%M-%S')}-{camera_type}.mp4"
+            next_path = parent_dir / next_filename
+            
+            if next_path.exists():
+                sequential_clips.append(next_path)
+                current_time = next_time
+            else:
+                break
+        
+        return sequential_clips
+    
     def get_camera_clips(self, front_video_path):
         """Get all camera clips for a given event"""
         # Extract the base timestamp from front camera file
@@ -205,21 +336,42 @@ class TeslaCamViewer:
         # Sort by timestamp (newest first)
         video_data.sort(key=lambda x: x[2] if x[2] else datetime.min, reverse=True)
         
-        # Populate listbox
+        # Group sequential clips and only show the first clip of each event
+        seen_events = set()
+        
         for video_file, dir_name, timestamp in video_data:
             if timestamp:
-                # Format: [Type] MM/DD/YYYY HH:MM:SS
-                display_name = f"[{dir_name[:6]}] {timestamp.strftime('%m/%d/%Y %I:%M:%S %p')}"
+                # Round timestamp to find event groups (clips within same event)
+                # We'll identify unique events by checking if we've seen a clip within +/- 30 seconds
+                event_key = None
+                for seen_time in seen_events:
+                    if abs((timestamp - seen_time).total_seconds()) <= 90:  # Within 1.5 minutes
+                        event_key = seen_time
+                        break
+                
+                if event_key is None:
+                    # New event - find all sequential clips
+                    sequential_clips = self.get_sequential_clips(video_file, 'front')
+                    first_clip_time = self.parse_timestamp(sequential_clips[0])
+                    
+                    if first_clip_time and first_clip_time not in seen_events:
+                        seen_events.add(first_clip_time)
+                        
+                        # Display with clip count
+                        duration_min = len(sequential_clips)
+                        display_name = f"[{dir_name[:6]}] {first_clip_time.strftime('%m/%d/%Y %I:%M:%S %p')} ({duration_min} min)"
+                        
+                        self.file_listbox.insert(tk.END, display_name)
+                        self.video_files.append(sequential_clips[0])  # Store first clip as reference
             else:
-                # Fallback to filename
+                # Fallback for files without parseable timestamp
                 display_name = f"[{dir_name[:6]}] {video_file.stem}"
-            
-            self.file_listbox.insert(tk.END, display_name)
-            self.video_files.append(video_file)
+                self.file_listbox.insert(tk.END, display_name)
+                self.video_files.append(video_file)
         
         # Update status
-        count = len(video_data)
-        self.status_label.config(text=f"Found {count} clip(s) in {folder_type}")
+        count = len(self.video_files)
+        self.status_label.config(text=f"Found {count} event(s) in {folder_type}")
                     
     def on_file_select(self, event):
         """Handle file selection from listbox"""
@@ -230,25 +382,33 @@ class TeslaCamViewer:
             self.load_merged_video(video_path)
             
     def load_merged_video(self, front_video_path):
-        """Load all camera angles for merged playback"""
+        """Load all camera angles for merged playback with sequential clip stitching"""
         # Release any existing captures
         for cap in self.video_captures.values():
-            cap.release()
+            if isinstance(cap, MultiVideoCapture):
+                cap.release()
         self.video_captures.clear()
         
-        # Get all camera clips
+        # Get all camera clips for this timestamp
         camera_clips = self.get_camera_clips(front_video_path)
         
-        # Load all available cameras
+        # For each camera, get sequential clips and create MultiVideoCapture
+        total_clips = 0
         for camera, path in camera_clips.items():
-            cap = cv2.VideoCapture(str(path))
-            if cap.isOpened():
-                self.video_captures[camera] = cap
+            camera_type = camera if camera == 'front' or camera == 'back' else f"{camera}_repeater"
+            sequential_clips = self.get_sequential_clips(path, camera_type)
+            
+            if sequential_clips:
+                multi_cap = MultiVideoCapture(sequential_clips)
+                if multi_cap.isOpened():
+                    self.video_captures[camera] = multi_cap
+                    total_clips = max(total_clips, len(sequential_clips))
         
         if self.video_captures:
             self.current_video = front_video_path
             camera_count = len(self.video_captures)
-            self.status_label.config(text=f"Loaded: {front_video_path.stem} ({camera_count} cameras)")
+            duration_min = total_clips
+            self.status_label.config(text=f"Loaded: {front_video_path.stem} ({camera_count} cameras, {duration_min} min)")
             self.is_playing = False
             self.play_button.config(text="▶ Play")
             self.show_merged_frame()
@@ -390,14 +550,16 @@ class TeslaCamViewer:
                           "A Python application for viewing Tesla dashcam footage.\n\n"
                           "Features:\n"
                           "- 4-camera merged view\n"
-                          "- Synchronized playback\n\n"
+                          "- Synchronized playback\n"
+                          "- Automatic clip stitching\n\n"
                           "Created by Aidan\n"
                           "GitHub: github.com/A1dqn/teslacam-viewer")
         
     def __del__(self):
         """Cleanup on exit"""
         for cap in self.video_captures.values():
-            cap.release()
+            if isinstance(cap, MultiVideoCapture):
+                cap.release()
 
 
 def main():
