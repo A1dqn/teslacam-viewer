@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 import threading
 import numpy as np
 import platform
+import time
 
 
 class MultiVideoCapture:
@@ -120,6 +121,8 @@ class TeslaCamViewer:
         self.all_events = []
         self.playback_speed = 1.0  # Current playback speed multiplier
         self.speed_buttons = []  # Store speed button references
+        self.last_frame_time = 0  # Track time of last frame for accurate playback
+        self.video_fps = 30.0  # Will be set from actual video
         
         # Configure style
         self.setup_style()
@@ -701,15 +704,23 @@ class TeslaCamViewer:
             self.current_video = front_video_clips[0]
             timestamp = self.parse_timestamp(front_video_clips[0])
             
+            # Get actual video FPS
+            if 'front' in self.video_captures:
+                fps = self.video_captures['front'].get(cv2.CAP_PROP_FPS)
+                if fps > 0:
+                    self.video_fps = fps
+                else:
+                    self.video_fps = 30.0  # Default
+            
             if timestamp:
                 self.video_title.config(text=timestamp.strftime('%A, %B %d, %Y'))
                 camera_count = len(self.video_captures)
-                self.video_info.config(text=f"🕐 {timestamp.strftime('%I:%M:%S %p')} • 📹 {camera_count} cameras • ⏱️ {total_clips} minutes")
+                self.video_info.config(text=f"🕐 {timestamp.strftime('%I:%M:%S %p')} • 📹 {camera_count} cameras • ⏱️ {total_clips} minutes • {self.video_fps:.1f} FPS")
             
             self.is_playing = False
             self.play_button.config(text="▶ Play")
             self.show_merged_frame()
-            self.status_label.config(text=f"Ready to play - {total_clips} minute event with {len(self.video_captures)} camera angles")
+            self.status_label.config(text=f"Ready to play - {total_clips} minute event at {self.video_fps:.1f} FPS")
         else:
             messagebox.showerror("Error", f"Could not open any video files")
             
@@ -787,12 +798,13 @@ class TeslaCamViewer:
         self.is_playing = not self.is_playing
         if self.is_playing:
             self.play_button.config(text="⏸ Pause")
+            self.last_frame_time = time.time()
             self.play_video()
         else:
             self.play_button.config(text="▶ Play")
             
     def play_video(self):
-        """Play merged video with speed control"""
+        """Play merged video with time-based speed control"""
         if self.is_playing and self.video_captures:
             has_frames = False
             for cap in self.video_captures.values():
@@ -801,23 +813,19 @@ class TeslaCamViewer:
                     break
             
             if has_frames:
-                # Skip frames for speeds > 1x
-                if self.playback_speed > 1.0:
-                    # Skip frames to speed up
-                    skip_frames = int(self.playback_speed) - 1
-                    for _ in range(skip_frames):
-                        for cap in self.video_captures.values():
-                            cap.read()  # Read and discard frame
+                current_time = time.time()
                 
-                self.show_merged_frame()
+                # Calculate how much time should have passed for one frame at current speed
+                frame_duration = (1.0 / self.video_fps) / self.playback_speed
+                time_since_last_frame = current_time - self.last_frame_time
                 
-                # Use fixed 33ms delay for smooth playback, adjust for slow motion
-                if self.playback_speed < 1.0:
-                    delay = int(33 / self.playback_speed)
-                else:
-                    delay = 33
+                # Only show new frame if enough time has passed
+                if time_since_last_frame >= frame_duration:
+                    self.show_merged_frame()
+                    self.last_frame_time = current_time
                 
-                self.root.after(delay, self.play_video)
+                # Schedule next update with minimal delay
+                self.root.after(1, self.play_video)
             else:
                 self.is_playing = False
                 self.play_button.config(text="▶ Play")
